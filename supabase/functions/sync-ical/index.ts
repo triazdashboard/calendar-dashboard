@@ -76,6 +76,7 @@ Deno.serve(async (req) => {
     const results = []
 
     for (const cal of calendars) {
+      if (cal.ical_url === 'https://placeholder') continue
       try {
         const res = await fetch(cal.ical_url)
         if (!res.ok) throw new Error(`HTTP ${res.status} fetching iCal`)

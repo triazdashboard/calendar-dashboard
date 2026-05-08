@@ -456,6 +456,7 @@ function ApartmentCard({ property, calendars, onRefresh, session }) {
   const addLink = async (form) => {
     setLinkSaving(true)
     await supabase.from('calendars').insert([{ ...form, property, name: form.source, user_id: session?.user?.id }])
+    await supabase.from('calendars').delete().eq('property', property).eq('ical_url', 'https://placeholder')
     setLinkSaving(false); setAddingLink(false); onRefresh()
   }
 
@@ -512,7 +513,7 @@ function ApartmentCard({ property, calendars, onRefresh, session }) {
 
       {/* iCal links */}
       <div className="divide-y divide-white/5">
-        {calendars.map((cal) => (
+        {calendars.filter(c => c.ical_url !== 'https://placeholder').map((cal) => (
           <div key={cal.id} className="px-4 py-3">
             {editingId === cal.id ? (
               <ICalLinkForm
@@ -599,7 +600,6 @@ function ApartmentsView({ onSyncDone, onBack, session }) {
     setAptSaving(true)
     const uid = session?.user?.id
     await supabase.from('calendars').insert([{ name: 'placeholder', property: newAptName.trim(), source: 'airbnb', ical_url: 'https://placeholder', user_id: uid }])
-    await supabase.from('calendars').delete().eq('property', newAptName.trim()).eq('ical_url', 'https://placeholder').eq('user_id', uid)
     setAptSaving(false); setNewAptName(''); setAddingApt(false); load()
   }
 
