@@ -436,7 +436,7 @@ function ICalLinkForm({ initial, onSave, onCancel, saving }) {
   )
 }
 
-function ApartmentCard({ property, calendars, onRefresh }) {
+function ApartmentCard({ property, calendars, onRefresh, session }) {
   const [editingName, setEditingName] = useState(false)
   const [name, setName] = useState(property)
   const [renameSaving, setRenameSaving] = useState(false)
@@ -455,7 +455,7 @@ function ApartmentCard({ property, calendars, onRefresh }) {
 
   const addLink = async (form) => {
     setLinkSaving(true)
-    await supabase.from('calendars').insert([{ ...form, property, name: form.source }])
+    await supabase.from('calendars').insert([{ ...form, property, name: form.source, user_id: session?.user?.id }])
     setLinkSaving(false); setAddingLink(false); onRefresh()
   }
 
@@ -568,7 +568,7 @@ function ApartmentCard({ property, calendars, onRefresh }) {
   )
 }
 
-function ApartmentsView({ onSyncDone, onBack }) {
+function ApartmentsView({ onSyncDone, onBack, session }) {
   const [calendars, setCalendars] = useState(null)
   const [syncing, setSyncing] = useState(false)
   const [syncResult, setSyncResult] = useState(null)
@@ -597,8 +597,9 @@ function ApartmentsView({ onSyncDone, onBack }) {
     e.preventDefault()
     if (!newAptName.trim()) return
     setAptSaving(true)
-    await supabase.from('calendars').insert([{ name: 'placeholder', property: newAptName.trim(), source: 'airbnb', ical_url: 'https://placeholder' }])
-    await supabase.from('calendars').delete().eq('property', newAptName.trim()).eq('ical_url', 'https://placeholder')
+    const uid = session?.user?.id
+    await supabase.from('calendars').insert([{ name: 'placeholder', property: newAptName.trim(), source: 'airbnb', ical_url: 'https://placeholder', user_id: uid }])
+    await supabase.from('calendars').delete().eq('property', newAptName.trim()).eq('ical_url', 'https://placeholder').eq('user_id', uid)
     setAptSaving(false); setNewAptName(''); setAddingApt(false); load()
   }
 
@@ -691,7 +692,7 @@ function ApartmentsView({ onSyncDone, onBack }) {
       )}
 
       {(apartments || []).map(([property, cals]) => (
-        <ApartmentCard key={property} property={property} calendars={cals} onRefresh={load} />
+        <ApartmentCard key={property} property={property} calendars={cals} onRefresh={load} session={session} />
       ))}
     </div>
   )
@@ -807,6 +808,7 @@ function Dashboard({ session, onSignOut }) {
             <ApartmentsView
               onSyncDone={() => setReloadKey((k) => k + 1)}
               onBack={() => setMainView('calendar')}
+              session={session}
             />
           </div>
         )}

@@ -13,8 +13,8 @@ async function dbSelect(table: string, query = '') {
   return res.json()
 }
 
-async function dbUpsert(table: string, rows: unknown[]) {
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}`, {
+async function dbUpsert(table: string, rows: unknown[], onConflict: string) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?on_conflict=${onConflict}`, {
     method: 'POST',
     headers: { ...BASE_HEADERS, Prefer: 'resolution=merge-duplicates,return=minimal' },
     body: JSON.stringify(rows),
@@ -85,6 +85,7 @@ Deno.serve(async (req) => {
         if (events.length > 0) {
           const bookings = events.map((e) => ({
             uid: e.uid,
+            user_id: cal.user_id,
             property: cal.property,
             source: cal.source,
             checkin: e.checkin,
@@ -93,7 +94,7 @@ Deno.serve(async (req) => {
             nights: e.nights,
             last_sync: new Date().toISOString(),
           }))
-          await dbUpsert('bookings', bookings)
+          await dbUpsert('bookings', bookings, 'uid,user_id')
           totalSynced += bookings.length
         }
 
