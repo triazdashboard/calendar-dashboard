@@ -604,13 +604,10 @@ function ApartmentsView({ onSyncDone, onBack }) {
 
   const syncAll = async () => {
     setSyncing(true); setSyncResult(null)
-    try {
-      const res = await supabase.functions.invoke('sync-ical')
-      setSyncResult(res.data)
-      onSyncDone()
-    } catch (e) {
-      setSyncResult({ error: e.message })
-    }
+    const { data, error } = await supabase.functions.invoke('sync-ical')
+    if (error) setSyncResult({ error: error.message || JSON.stringify(error) })
+    else setSyncResult(data)
+    if (!error) onSyncDone()
     setSyncing(false)
   }
 
