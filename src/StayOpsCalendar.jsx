@@ -8,6 +8,7 @@ import {
   Calendar, CalendarDays, CalendarRange, Clock,
   ChevronLeft, ChevronRight, LogOut, Building2,
   RefreshCw, X, AlertCircle, Loader2, Moon, Filter,
+  Link, Plus, Trash2, Check,
 } from 'lucide-react'
 
 const supabase = createClient(
@@ -405,8 +406,145 @@ function MonthView({ bookings, anchor, onPick }) {
   )
 }
 
+// ──────────────────────────────────────────────────────── calendars ──
+const EMPTY_CAL = { name: '', property: '', source: 'airbnb', ical_url: '' }
+
+function CalendarsPanel({ onSyncDone }) {
+  const [calendars, setCalendars] = useState(null)
+  const [adding, setAdding] = useState(false)
+  const [form, setForm] = useState(EMPTY_CAL)
+  const [saving, setSaving] = useState(false)
+  const [syncing, setSyncing] = useState(false)
+  const [syncResult, setSyncResult] = useState(null)
+
+  const load = async () => {
+    const { data } = await supabase.from('calendars').select('*').order('name')
+    setCalendars(data || [])
+  }
+
+  useEffect(() => { load() }, [])
+
+  const save = async (e) => {
+    e.preventDefault()
+    if (!form.name || !form.property || !form.ical_url) return
+    setSaving(true)
+    await supabase.from('calendars').insert([form])
+    setForm(EMPTY_CAL); setAdding(false); setSaving(false)
+    load()
+  }
+
+  const remove = async (id) => {
+    await supabase.from('calendars').delete().eq('id', id)
+    load()
+  }
+
+  const syncAll = async () => {
+    setSyncing(true); setSyncResult(null)
+    try {
+      const res = await supabase.functions.invoke('sync-ical')
+      setSyncResult(res.data)
+      onSyncDone()
+    } catch (e) {
+      setSyncResult({ error: e.message })
+    }
+    setSyncing(false)
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <div className="text-white/85 font-medium">Calendari iCal</div>
+        <div className="flex items-center gap-2">
+          <button onClick={syncAll} disabled={syncing}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/5 hover:bg-white/10 px-3 py-1.5 text-sm disabled:opacity-50 transition">
+            {syncing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+            {syncing ? 'Sync…' : 'Sincronizza'}
+          </button>
+          <button onClick={() => setAdding((v) => !v)}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500/20 border border-emerald-400/30 hover:bg-emerald-500/30 px-3 py-1.5 text-sm text-emerald-200 transition">
+            <Plus className="h-4 w-4" />Aggiungi
+          </button>
+        </div>
+      </div>
+
+      {syncResult && (
+        <div className={`rounded-xl border px-4 py-3 text-sm flex items-start gap-2 ${
+          syncResult.error
+            ? 'border-red-500/30 bg-red-500/10 text-red-200'
+            : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
+        }`}>
+          {syncResult.error
+            ? <><AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />{syncResult.error}</>
+            : <><Check className="h-4 w-4 mt-0.5 shrink-0" />Sincronizzate {syncResult.synced} prenotazioni</>
+          }
+        </div>
+      )}
+
+      {adding && (
+        <form onSubmit={save} className="rounded-2xl border border-white/10 bg-white/[0.04] p-4 space-y-3">
+          <div className="text-xs uppercase tracking-wider text-white/40 mb-1">Nuovo calendario</div>
+          <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}
+                 placeholder="Nome (es. Airbnb Milano)" required
+                 className="w-full rounded-lg bg-white/5 border border-white/10 px-3 py-2 text-sm text-white placeholder-white/30 focus:outline-none focus:border-emerald-400/60" />
+          <input value={form.property} onChange={(e) => setForm({ ...form, property: e.target.value })}
+                 placeholder="Proprietà (es. Appartamento Milano)" required
+                 className="w-full rounded-lg bg-white/5 border border-white/10 px-3 py-2 text-sm text-white placeholder-white/30 focus:outline-none focus:border-emerald-400/60" />
+          <select value={form.source} onChange={(e) => setForm({ ...form, source: e.target.value })}
+                  className="w-full rounded-lg bg-white/5 border border-white/10 px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-400/60">
+            <option value="airbnb">Airbnb</option>
+            <option value="booking">Booking.com</option>
+            <option value="vrbo">VRBO</option>
+            <option value="altro">Altro</option>
+          </select>
+          <input value={form.ical_url} onChange={(e) => setForm({ ...form, ical_url: e.target.value })}
+                 placeholder="URL iCal (.ics)" required type="url"
+                 className="w-full rounded-lg bg-white/5 border border-white/10 px-3 py-2 text-sm text-white placeholder-white/30 focus:outline-none focus:border-emerald-400/60" />
+          <div className="flex gap-2 pt-1">
+            <button type="submit" disabled={saving}
+                    className="rounded-lg bg-emerald-500/20 border border-emerald-400/30 hover:bg-emerald-500/30 px-3 py-1.5 text-sm text-emerald-200 disabled:opacity-50">
+              {saving ? 'Salvo…' : 'Salva'}
+            </button>
+            <button type="button" onClick={() => { setAdding(false); setForm(EMPTY_CAL) }}
+                    className="rounded-lg border border-white/10 bg-white/5 hover:bg-white/10 px-3 py-1.5 text-sm text-white/60">
+              Annulla
+            </button>
+          </div>
+        </form>
+      )}
+
+      <div className="rounded-2xl border border-white/10 bg-white/[0.04] backdrop-blur-xl divide-y divide-white/5">
+        {calendars === null && <div className="p-4"><Skeleton className="h-10 w-full" /></div>}
+        {calendars !== null && calendars.length === 0 && (
+          <div className="py-10 text-center text-white/30 text-sm">
+            <Link className="h-6 w-6 mx-auto mb-2 opacity-40" />
+            Nessun calendario configurato
+          </div>
+        )}
+        {(calendars || []).map((cal) => (
+          <div key={cal.id} className="flex items-center gap-3 px-4 py-3">
+            <div className="flex-1 min-w-0">
+              <div className="text-sm text-white/85 font-medium truncate">{cal.name}</div>
+              <div className="text-xs text-white/45 truncate">{cal.property} · {cal.source}</div>
+              {cal.last_sync && (
+                <div className="text-[10px] text-white/30 mt-0.5">
+                  Sync: {new Date(cal.last_sync).toLocaleString('it-IT', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                </div>
+              )}
+            </div>
+            <button onClick={() => remove(cal.id)}
+                    className="p-1.5 text-white/30 hover:text-red-400 rounded-md hover:bg-red-400/10 transition">
+              <Trash2 className="h-4 w-4" />
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 // ──────────────────────────────────────────────────────── dashboard ──
 function Dashboard({ session, onSignOut }) {
+  const [mainView, setMainView] = useState('calendar') // 'calendar' | 'calendars'
   const [view, setView] = useState('day')
   const [anchor, setAnchor] = useState(new Date()) // ref date for day/week/month
   const [bookings, setBookings] = useState(null)   // null = loading
@@ -478,7 +616,17 @@ function Dashboard({ session, onSignOut }) {
             <div className="text-white/30 text-xs hidden sm:block">· Calendar</div>
           </div>
 
-          <div className="flex-1 flex justify-center"><ViewSwitcher view={view} setView={setView} /></div>
+          <div className="flex-1 flex justify-center items-center gap-3">
+            {mainView === 'calendar' && <ViewSwitcher view={view} setView={setView} />}
+            <button onClick={() => setMainView((v) => v === 'calendars' ? 'calendar' : 'calendars')}
+                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-sm transition ${
+                      mainView === 'calendars'
+                        ? 'border-emerald-400/40 bg-emerald-400/10 text-emerald-200'
+                        : 'border-white/10 bg-white/[0.04] text-white/55 hover:text-white/85'
+                    }`}>
+              <Link className="h-4 w-4" />iCal
+            </button>
+          </div>
 
           <div className="flex items-center gap-3">
             <div className="hidden md:flex items-center gap-1.5 text-xs text-white/45">
@@ -497,8 +645,16 @@ function Dashboard({ session, onSignOut }) {
       </header>
 
       <div className="relative z-10 mx-auto max-w-[1400px] px-5 py-5 grid grid-cols-12 gap-5">
+
+        {/* calendars view (full width) */}
+        {mainView === 'calendars' && (
+          <div className="col-span-12 max-w-2xl mx-auto w-full">
+            <CalendarsPanel onSyncDone={() => setReloadKey((k) => k + 1)} />
+          </div>
+        )}
+
         {/* sidebar */}
-        <aside className="col-span-12 md:col-span-3 lg:col-span-3">
+        {mainView === 'calendar' && <aside className="col-span-12 md:col-span-3 lg:col-span-3">
           <div className="rounded-2xl border border-white/10 bg-white/[0.04] backdrop-blur-xl">
             <div className="px-4 py-3 border-b border-white/10 flex items-center gap-2 text-sm">
               <Building2 className="h-4 w-4 text-white/55" />
@@ -530,10 +686,10 @@ function Dashboard({ session, onSignOut }) {
               <KindBadge kind="stay" />
             </div>
           </div>
-        </aside>
+        </aside>}
 
         {/* main */}
-        <main className="col-span-12 md:col-span-9 lg:col-span-9">
+        {mainView === 'calendar' && <main className="col-span-12 md:col-span-9 lg:col-span-9">
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-2">
               <button onClick={goPrev} className="p-1.5 rounded-md border border-white/10 bg-white/5 hover:bg-white/10"><ChevronLeft className="h-4 w-4" /></button>
@@ -578,7 +734,7 @@ function Dashboard({ session, onSignOut }) {
               {view === 'month' && <MonthView bookings={filtered} anchor={anchor} onPick={setPicked} />}
             </>
           )}
-        </main>
+        </main>}
       </div>
 
       <BookingModal booking={picked} onClose={() => setPicked(null)} />
