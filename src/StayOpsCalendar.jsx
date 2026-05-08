@@ -406,36 +406,200 @@ function MonthView({ bookings, anchor, onPick }) {
   )
 }
 
-// ──────────────────────────────────────────────────────── calendars ──
-const EMPTY_CAL = { name: '', property: '', source: 'airbnb', ical_url: '' }
+// ──────────────────────────────────────────────────────── apartments ──
+const EMPTY_LINK = { source: 'airbnb', ical_url: '' }
+const INPUT_CLS = 'w-full rounded-lg bg-white/5 border border-white/10 px-3 py-2 text-sm text-white placeholder-white/30 focus:outline-none focus:border-emerald-400/60'
 
-function CalendarsPanel({ onSyncDone }) {
+function ICalLinkForm({ initial, onSave, onCancel, saving }) {
+  const [form, setForm] = useState(initial || EMPTY_LINK)
+  return (
+    <form onSubmit={(e) => { e.preventDefault(); onSave(form) }} className="space-y-2 p-3 rounded-xl bg-white/[0.04] border border-white/10">
+      <select value={form.source} onChange={(e) => setForm({ ...form, source: e.target.value })} className={INPUT_CLS}>
+        <option value="airbnb">Airbnb</option>
+        <option value="booking">Booking.com</option>
+        <option value="vrbo">VRBO</option>
+        <option value="altro">Altro</option>
+      </select>
+      <input value={form.ical_url} onChange={(e) => setForm({ ...form, ical_url: e.target.value })}
+             placeholder="URL iCal (.ics)" required type="url" className={INPUT_CLS} />
+      <div className="flex gap-2">
+        <button type="submit" disabled={saving}
+                className="rounded-lg bg-emerald-500/20 border border-emerald-400/30 hover:bg-emerald-500/30 px-3 py-1.5 text-sm text-emerald-200 disabled:opacity-50">
+          {saving ? 'Salvo…' : 'Salva'}
+        </button>
+        <button type="button" onClick={onCancel}
+                className="rounded-lg border border-white/10 bg-white/5 hover:bg-white/10 px-3 py-1.5 text-sm text-white/60">
+          Annulla
+        </button>
+      </div>
+    </form>
+  )
+}
+
+function ApartmentCard({ property, calendars, onRefresh }) {
+  const [editingName, setEditingName] = useState(false)
+  const [name, setName] = useState(property)
+  const [renameSaving, setRenameSaving] = useState(false)
+  const [addingLink, setAddingLink] = useState(false)
+  const [linkSaving, setLinkSaving] = useState(false)
+  const [editingId, setEditingId] = useState(null)
+
+  const rename = async (e) => {
+    e.preventDefault()
+    if (!name.trim() || name === property) { setEditingName(false); return }
+    setRenameSaving(true)
+    await supabase.from('calendars').update({ property: name.trim() }).eq('property', property)
+    await supabase.from('bookings').update({ property: name.trim() }).eq('property', property)
+    setRenameSaving(false); setEditingName(false); onRefresh()
+  }
+
+  const addLink = async (form) => {
+    setLinkSaving(true)
+    await supabase.from('calendars').insert([{ ...form, property, name: form.source }])
+    setLinkSaving(false); setAddingLink(false); onRefresh()
+  }
+
+  const updateLink = async (id, form) => {
+    setLinkSaving(true)
+    await supabase.from('calendars').update({ source: form.source, ical_url: form.ical_url, name: form.source }).eq('id', id)
+    setLinkSaving(false); setEditingId(null); onRefresh()
+  }
+
+  const deleteLink = async (id) => {
+    await supabase.from('calendars').delete().eq('id', id)
+    onRefresh()
+  }
+
+  const deleteApartment = async () => {
+    await supabase.from('calendars').delete().eq('property', property)
+    onRefresh()
+  }
+
+  return (
+    <div className="rounded-2xl border border-white/10 bg-white/[0.04] backdrop-blur-xl overflow-hidden">
+      {/* apartment header */}
+      <div className="flex items-center gap-3 px-4 py-3 border-b border-white/10">
+        {editingName ? (
+          <form onSubmit={rename} className="flex-1 flex items-center gap-2">
+            <input value={name} onChange={(e) => setName(e.target.value)} autoFocus
+                   className="flex-1 rounded-lg bg-white/5 border border-emerald-400/50 px-3 py-1.5 text-sm text-white focus:outline-none" />
+            <button type="submit" disabled={renameSaving}
+                    className="px-3 py-1.5 rounded-lg bg-emerald-500/20 border border-emerald-400/30 text-emerald-200 text-sm disabled:opacity-50">
+              {renameSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+            </button>
+            <button type="button" onClick={() => { setEditingName(false); setName(property) }}
+                    className="p-1.5 rounded-lg border border-white/10 text-white/50 hover:text-white">
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </form>
+        ) : (
+          <>
+            <Building2 className="h-4 w-4 text-white/40 shrink-0" />
+            <span className="flex-1 text-white font-medium truncate">{property}</span>
+            <button onClick={() => { setEditingName(true); setName(property) }}
+                    className="p-1.5 text-white/30 hover:text-white/70 rounded-md hover:bg-white/5 transition" title="Rinomina">
+              <svg className="h-3.5 w-3.5" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M11.013 1.427a1.75 1.75 0 0 1 2.474 0l1.086 1.086a1.75 1.75 0 0 1 0 2.474l-8.61 8.61c-.21.21-.47.364-.756.445l-3.251.93a.75.75 0 0 1-.927-.928l.929-3.25c.081-.286.235-.547.445-.758l8.61-8.61Z"/>
+              </svg>
+            </button>
+            <button onClick={deleteApartment}
+                    className="p-1.5 text-white/30 hover:text-red-400 rounded-md hover:bg-red-400/10 transition" title="Elimina appartamento">
+              <Trash2 className="h-3.5 w-3.5" />
+            </button>
+          </>
+        )}
+      </div>
+
+      {/* iCal links */}
+      <div className="divide-y divide-white/5">
+        {calendars.map((cal) => (
+          <div key={cal.id} className="px-4 py-3">
+            {editingId === cal.id ? (
+              <ICalLinkForm
+                initial={{ source: cal.source, ical_url: cal.ical_url }}
+                onSave={(form) => updateLink(cal.id, form)}
+                onCancel={() => setEditingId(null)}
+                saving={linkSaving}
+              />
+            ) : (
+              <div className="flex items-center gap-3">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-0.5">
+                    <SourceBadge source={cal.source} />
+                    {cal.last_sync && (
+                      <span className="text-[10px] text-white/30">
+                        sync {new Date(cal.last_sync).toLocaleString('it-IT', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-xs text-white/35 truncate font-mono">{cal.ical_url}</div>
+                </div>
+                <button onClick={() => setEditingId(cal.id)}
+                        className="p-1.5 text-white/30 hover:text-white/70 rounded-md hover:bg-white/5 transition" title="Modifica">
+                  <svg className="h-3.5 w-3.5" viewBox="0 0 16 16" fill="currentColor">
+                    <path d="M11.013 1.427a1.75 1.75 0 0 1 2.474 0l1.086 1.086a1.75 1.75 0 0 1 0 2.474l-8.61 8.61c-.21.21-.47.364-.756.445l-3.251.93a.75.75 0 0 1-.927-.928l.929-3.25c.081-.286.235-.547.445-.758l8.61-8.61Z"/>
+                  </svg>
+                </button>
+                <button onClick={() => deleteLink(cal.id)}
+                        className="p-1.5 text-white/30 hover:text-red-400 rounded-md hover:bg-red-400/10 transition" title="Rimuovi">
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            )}
+          </div>
+        ))}
+
+        {addingLink ? (
+          <div className="px-4 py-3">
+            <ICalLinkForm
+              onSave={addLink}
+              onCancel={() => setAddingLink(false)}
+              saving={linkSaving}
+            />
+          </div>
+        ) : (
+          <button onClick={() => setAddingLink(true)}
+                  className="w-full flex items-center gap-2 px-4 py-2.5 text-xs text-white/40 hover:text-white/70 hover:bg-white/[0.03] transition">
+            <Plus className="h-3.5 w-3.5" />Aggiungi link iCal
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function ApartmentsView({ onSyncDone, onBack }) {
   const [calendars, setCalendars] = useState(null)
-  const [adding, setAdding] = useState(false)
-  const [form, setForm] = useState(EMPTY_CAL)
-  const [saving, setSaving] = useState(false)
   const [syncing, setSyncing] = useState(false)
   const [syncResult, setSyncResult] = useState(null)
+  const [addingApt, setAddingApt] = useState(false)
+  const [newAptName, setNewAptName] = useState('')
+  const [aptSaving, setAptSaving] = useState(false)
 
   const load = async () => {
-    const { data } = await supabase.from('calendars').select('*').order('name')
+    const { data } = await supabase.from('calendars').select('*').order('property')
     setCalendars(data || [])
   }
 
   useEffect(() => { load() }, [])
 
-  const save = async (e) => {
-    e.preventDefault()
-    if (!form.name || !form.property || !form.ical_url) return
-    setSaving(true)
-    await supabase.from('calendars').insert([form])
-    setForm(EMPTY_CAL); setAdding(false); setSaving(false)
-    load()
-  }
+  const apartments = useMemo(() => {
+    if (!calendars) return null
+    const map = new Map()
+    for (const cal of calendars) {
+      if (!map.has(cal.property)) map.set(cal.property, [])
+      map.get(cal.property).push(cal)
+    }
+    return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0]))
+  }, [calendars])
 
-  const remove = async (id) => {
-    await supabase.from('calendars').delete().eq('id', id)
-    load()
+  const createApartment = async (e) => {
+    e.preventDefault()
+    if (!newAptName.trim()) return
+    setAptSaving(true)
+    await supabase.from('calendars').insert([{ name: 'placeholder', property: newAptName.trim(), source: 'airbnb', ical_url: 'https://placeholder' }])
+    await supabase.from('calendars').delete().eq('property', newAptName.trim()).eq('ical_url', 'https://placeholder')
+    setAptSaving(false); setNewAptName(''); setAddingApt(false); load()
   }
 
   const syncAll = async () => {
@@ -451,20 +615,25 @@ function CalendarsPanel({ onSyncDone }) {
   }
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div className="text-white/85 font-medium">Calendari iCal</div>
-        <div className="flex items-center gap-2">
-          <button onClick={syncAll} disabled={syncing}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/5 hover:bg-white/10 px-3 py-1.5 text-sm disabled:opacity-50 transition">
-            {syncing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-            {syncing ? 'Sync…' : 'Sincronizza'}
-          </button>
-          <button onClick={() => setAdding((v) => !v)}
-                  className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500/20 border border-emerald-400/30 hover:bg-emerald-500/30 px-3 py-1.5 text-sm text-emerald-200 transition">
-            <Plus className="h-4 w-4" />Aggiungi
-          </button>
-        </div>
+    <div className="space-y-5">
+      {/* page header */}
+      <div className="flex items-center gap-3">
+        <button onClick={onBack}
+                className="inline-flex items-center gap-1.5 text-sm text-white/50 hover:text-white transition">
+          <ChevronLeft className="h-4 w-4" />Calendario
+        </button>
+        <span className="text-white/20">/</span>
+        <span className="text-white/85 font-medium">Appartamenti</span>
+        <div className="flex-1" />
+        <button onClick={syncAll} disabled={syncing}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/5 hover:bg-white/10 px-3 py-1.5 text-sm disabled:opacity-50 transition">
+          {syncing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+          {syncing ? 'Sync…' : 'Sincronizza tutto'}
+        </button>
+        <button onClick={() => setAddingApt((v) => !v)}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500/20 border border-emerald-400/30 hover:bg-emerald-500/30 px-3 py-1.5 text-sm text-emerald-200 transition">
+          <Plus className="h-4 w-4" />Appartamento
+        </button>
       </div>
 
       {syncResult && (
@@ -475,69 +644,44 @@ function CalendarsPanel({ onSyncDone }) {
         }`}>
           {syncResult.error
             ? <><AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />{syncResult.error}</>
-            : <><Check className="h-4 w-4 mt-0.5 shrink-0" />Sincronizzate {syncResult.synced} prenotazioni</>
-          }
+            : <><Check className="h-4 w-4 mt-0.5 shrink-0" />Sincronizzate {syncResult.synced} prenotazioni</>}
         </div>
       )}
 
-      {adding && (
-        <form onSubmit={save} className="rounded-2xl border border-white/10 bg-white/[0.04] p-4 space-y-3">
-          <div className="text-xs uppercase tracking-wider text-white/40 mb-1">Nuovo calendario</div>
-          <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}
-                 placeholder="Nome (es. Airbnb Milano)" required
-                 className="w-full rounded-lg bg-white/5 border border-white/10 px-3 py-2 text-sm text-white placeholder-white/30 focus:outline-none focus:border-emerald-400/60" />
-          <input value={form.property} onChange={(e) => setForm({ ...form, property: e.target.value })}
-                 placeholder="Proprietà (es. Appartamento Milano)" required
-                 className="w-full rounded-lg bg-white/5 border border-white/10 px-3 py-2 text-sm text-white placeholder-white/30 focus:outline-none focus:border-emerald-400/60" />
-          <select value={form.source} onChange={(e) => setForm({ ...form, source: e.target.value })}
-                  className="w-full rounded-lg bg-white/5 border border-white/10 px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-400/60">
-            <option value="airbnb">Airbnb</option>
-            <option value="booking">Booking.com</option>
-            <option value="vrbo">VRBO</option>
-            <option value="altro">Altro</option>
-          </select>
-          <input value={form.ical_url} onChange={(e) => setForm({ ...form, ical_url: e.target.value })}
-                 placeholder="URL iCal (.ics)" required type="url"
-                 className="w-full rounded-lg bg-white/5 border border-white/10 px-3 py-2 text-sm text-white placeholder-white/30 focus:outline-none focus:border-emerald-400/60" />
-          <div className="flex gap-2 pt-1">
-            <button type="submit" disabled={saving}
-                    className="rounded-lg bg-emerald-500/20 border border-emerald-400/30 hover:bg-emerald-500/30 px-3 py-1.5 text-sm text-emerald-200 disabled:opacity-50">
-              {saving ? 'Salvo…' : 'Salva'}
-            </button>
-            <button type="button" onClick={() => { setAdding(false); setForm(EMPTY_CAL) }}
-                    className="rounded-lg border border-white/10 bg-white/5 hover:bg-white/10 px-3 py-1.5 text-sm text-white/60">
-              Annulla
-            </button>
-          </div>
+      {addingApt && (
+        <form onSubmit={createApartment}
+              className="flex items-center gap-2 rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3">
+          <Building2 className="h-4 w-4 text-white/40 shrink-0" />
+          <input value={newAptName} onChange={(e) => setNewAptName(e.target.value)}
+                 placeholder="Nome appartamento" required autoFocus
+                 className="flex-1 bg-transparent text-sm text-white placeholder-white/30 focus:outline-none" />
+          <button type="submit" disabled={aptSaving}
+                  className="rounded-lg bg-emerald-500/20 border border-emerald-400/30 hover:bg-emerald-500/30 px-3 py-1.5 text-sm text-emerald-200 disabled:opacity-50">
+            {aptSaving ? 'Creo…' : 'Crea'}
+          </button>
+          <button type="button" onClick={() => { setAddingApt(false); setNewAptName('') }}
+                  className="p-1.5 text-white/40 hover:text-white rounded-md hover:bg-white/5">
+            <X className="h-4 w-4" />
+          </button>
         </form>
       )}
 
-      <div className="rounded-2xl border border-white/10 bg-white/[0.04] backdrop-blur-xl divide-y divide-white/5">
-        {calendars === null && <div className="p-4"><Skeleton className="h-10 w-full" /></div>}
-        {calendars !== null && calendars.length === 0 && (
-          <div className="py-10 text-center text-white/30 text-sm">
-            <Link className="h-6 w-6 mx-auto mb-2 opacity-40" />
-            Nessun calendario configurato
-          </div>
-        )}
-        {(calendars || []).map((cal) => (
-          <div key={cal.id} className="flex items-center gap-3 px-4 py-3">
-            <div className="flex-1 min-w-0">
-              <div className="text-sm text-white/85 font-medium truncate">{cal.name}</div>
-              <div className="text-xs text-white/45 truncate">{cal.property} · {cal.source}</div>
-              {cal.last_sync && (
-                <div className="text-[10px] text-white/30 mt-0.5">
-                  Sync: {new Date(cal.last_sync).toLocaleString('it-IT', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
-                </div>
-              )}
-            </div>
-            <button onClick={() => remove(cal.id)}
-                    className="p-1.5 text-white/30 hover:text-red-400 rounded-md hover:bg-red-400/10 transition">
-              <Trash2 className="h-4 w-4" />
-            </button>
-          </div>
-        ))}
-      </div>
+      {calendars === null && <Skeleton className="h-32 w-full rounded-2xl" />}
+
+      {apartments !== null && apartments.length === 0 && !addingApt && (
+        <div className="rounded-2xl border border-white/10 bg-white/[0.02] py-16 text-center">
+          <Building2 className="h-8 w-8 mx-auto mb-3 text-white/20" />
+          <div className="text-white/40 text-sm">Nessun appartamento configurato</div>
+          <button onClick={() => setAddingApt(true)}
+                  className="mt-4 inline-flex items-center gap-1.5 rounded-lg bg-emerald-500/20 border border-emerald-400/30 hover:bg-emerald-500/30 px-4 py-2 text-sm text-emerald-200 transition">
+            <Plus className="h-4 w-4" />Aggiungi il primo appartamento
+          </button>
+        </div>
+      )}
+
+      {(apartments || []).map(([property, cals]) => (
+        <ApartmentCard key={property} property={property} calendars={cals} onRefresh={load} />
+      ))}
     </div>
   )
 }
@@ -624,7 +768,7 @@ function Dashboard({ session, onSignOut }) {
                         ? 'border-emerald-400/40 bg-emerald-400/10 text-emerald-200'
                         : 'border-white/10 bg-white/[0.04] text-white/55 hover:text-white/85'
                     }`}>
-              <Link className="h-4 w-4" />iCal
+              <Building2 className="h-4 w-4" />Appartamenti
             </button>
           </div>
 
@@ -646,10 +790,13 @@ function Dashboard({ session, onSignOut }) {
 
       <div className="relative z-10 mx-auto max-w-[1400px] px-5 py-5 grid grid-cols-12 gap-5">
 
-        {/* calendars view (full width) */}
+        {/* apartments view (full width) */}
         {mainView === 'calendars' && (
           <div className="col-span-12 max-w-2xl mx-auto w-full">
-            <CalendarsPanel onSyncDone={() => setReloadKey((k) => k + 1)} />
+            <ApartmentsView
+              onSyncDone={() => setReloadKey((k) => k + 1)}
+              onBack={() => setMainView('calendar')}
+            />
           </div>
         )}
 
