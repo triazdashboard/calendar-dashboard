@@ -604,10 +604,24 @@ function ApartmentsView({ onSyncDone, onBack }) {
 
   const syncAll = async () => {
     setSyncing(true); setSyncResult(null)
-    const { data, error } = await supabase.functions.invoke('sync-ical')
-    if (error) setSyncResult({ error: error.message || JSON.stringify(error) })
-    else setSyncResult(data)
-    if (!error) onSyncDone()
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      const res = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/sync-ical`,
+        {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${session?.access_token}`,
+            'Content-Type': 'application/json',
+          },
+        }
+      )
+      const data = await res.json()
+      if (!res.ok) setSyncResult({ error: JSON.stringify(data) })
+      else { setSyncResult(data); onSyncDone() }
+    } catch (e) {
+      setSyncResult({ error: e.message })
+    }
     setSyncing(false)
   }
 

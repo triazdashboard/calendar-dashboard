@@ -1,105 +1,115 @@
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+// @ts-nocheck — Deno globals not available in local TS config
+const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!
+const SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
 
-const supabase = createClient(
-  Deno.env.get('SUPABASE_URL')!,
-  Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
-)
+const BASE_HEADERS = {
+  apikey: SERVICE_KEY,
+  Authorization: `Bearer ${SERVICE_KEY}`,
+  'Content-Type': 'application/json',
+}
+
+async function dbSelect(table: string, query = '') {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?${query}`, { headers: BASE_HEADERS })
+  return res.json()
+}
+
+async function dbUpsert(table: string, rows: unknown[]) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}`, {
+    method: 'POST',
+    headers: { ...BASE_HEADERS, Prefer: 'resolution=merge-duplicates,return=minimal' },
+    body: JSON.stringify(rows),
+  })
+  if (!res.ok) throw new Error(await res.text())
+}
+
+async function dbPatch(table: string, match: string, data: unknown) {
+  await fetch(`${SUPABASE_URL}/rest/v1/${table}?${match}`, {
+    method: 'PATCH',
+    headers: BASE_HEADERS,
+    body: JSON.stringify(data),
+  })
+}
 
 function parseDate(s: string): string {
-  // Handles YYYYMMDD or YYYYMMDDTHHmmssZ
-  const d = s.replace(/T.*/, '')
+  const d = s.replace(/T.*/, '').replace(/Z$/, '')
   return `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}`
 }
 
-function parseIcal(text: string): Array<{ uid: string; summary: string; checkin: string; checkout: string; nights: number }> {
-  const events: Array<{ uid: string; summary: string; checkin: string; checkout: string; nights: number }> = []
+function parseIcal(text: string) {
+  const events: { uid: string; summary: string; checkin: string; checkout: string; nights: number }[] = []
   const blocks = text.split('BEGIN:VEVENT')
-
   for (let i = 1; i < blocks.length; i++) {
     const block = blocks[i]
-
     const get = (key: string) => {
       const m = block.match(new RegExp(`^${key}(?:;[^:]*)?:(.+)`, 'm'))
       return m ? m[1].trim().replace(/\\n/g, '\n').replace(/\\,/g, ',') : null
     }
-
     const uid = get('UID')
     const rawStart = get('DTSTART')
     const rawEnd = get('DTEND')
     if (!uid || !rawStart || !rawEnd) continue
-
     const checkin = parseDate(rawStart)
     const checkout = parseDate(rawEnd)
-    const nights = Math.round(
-      (new Date(checkout).getTime() - new Date(checkin).getTime()) / 86_400_000,
-    )
-
+    const nights = Math.round((new Date(checkout).getTime() - new Date(checkin).getTime()) / 86_400_000)
     events.push({ uid, summary: get('SUMMARY') ?? '', checkin, checkout, nights })
   }
-
   return events
 }
 
+const CORS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, content-type',
+}
+
 Deno.serve(async (req) => {
-  // CORS preflight
-  if (req.method === 'OPTIONS') {
-    return new Response(null, {
-      headers: {
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Headers': 'authorization, content-type',
-      },
+  if (req.method === 'OPTIONS') return new Response(null, { headers: CORS })
+
+  try {
+    const calendars = await dbSelect('calendars', 'select=*')
+    if (!Array.isArray(calendars)) {
+      return new Response(JSON.stringify({ error: 'Failed to read calendars', detail: calendars }), {
+        status: 500, headers: { ...CORS, 'Content-Type': 'application/json' },
+      })
+    }
+
+    let totalSynced = 0
+    const results = []
+
+    for (const cal of calendars) {
+      try {
+        const res = await fetch(cal.ical_url)
+        if (!res.ok) throw new Error(`HTTP ${res.status} fetching iCal`)
+        const text = await res.text()
+        const events = parseIcal(text)
+
+        if (events.length > 0) {
+          const bookings = events.map((e) => ({
+            uid: e.uid,
+            property: cal.property,
+            source: cal.source,
+            checkin: e.checkin,
+            checkout: e.checkout,
+            summary: e.summary,
+            nights: e.nights,
+            last_sync: new Date().toISOString(),
+          }))
+          await dbUpsert('bookings', bookings)
+          totalSynced += bookings.length
+        }
+
+        await dbPatch('calendars', `id=eq.${cal.id}`, { last_sync: new Date().toISOString() })
+        results.push({ name: cal.name, property: cal.property, status: 'ok', count: events.length })
+      } catch (e: unknown) {
+        results.push({ name: cal.name, property: cal.property, status: 'error', error: (e as Error).message })
+      }
+    }
+
+    return new Response(JSON.stringify({ synced: totalSynced, results }), {
+      headers: { ...CORS, 'Content-Type': 'application/json' },
+    })
+  } catch (e: unknown) {
+    return new Response(JSON.stringify({ error: (e as Error).message }), {
+      status: 500, headers: { ...CORS, 'Content-Type': 'application/json' },
     })
   }
-
-  const { data: calendars, error: calErr } = await supabase.from('calendars').select('*')
-  if (calErr) {
-    return new Response(JSON.stringify({ error: calErr.message }), { status: 500 })
-  }
-
-  let totalSynced = 0
-  const results: Array<{ name: string; status: string; count?: number; error?: string }> = []
-
-  for (const cal of calendars ?? []) {
-    try {
-      const res = await fetch(cal.ical_url)
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const text = await res.text()
-      const events = parseIcal(text)
-
-      const bookings = events.map((e) => ({
-        uid: e.uid,
-        property: cal.property,
-        source: cal.source,
-        checkin: e.checkin,
-        checkout: e.checkout,
-        summary: e.summary,
-        nights: e.nights,
-        last_sync: new Date().toISOString(),
-      }))
-
-      if (bookings.length > 0) {
-        const { error: upsertErr } = await supabase
-          .from('bookings')
-          .upsert(bookings, { onConflict: 'uid' })
-        if (upsertErr) throw new Error(upsertErr.message)
-      }
-
-      await supabase
-        .from('calendars')
-        .update({ last_sync: new Date().toISOString() })
-        .eq('id', cal.id)
-
-      totalSynced += bookings.length
-      results.push({ name: cal.name, status: 'ok', count: bookings.length })
-    } catch (e: unknown) {
-      results.push({ name: cal.name, status: 'error', error: (e as Error).message })
-    }
-  }
-
-  return new Response(JSON.stringify({ synced: totalSynced, results }), {
-    headers: {
-      'Content-Type': 'application/json',
-      'Access-Control-Allow-Origin': '*',
-    },
-  })
 })
