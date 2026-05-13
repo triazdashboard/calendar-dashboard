@@ -8,17 +8,29 @@ const BASE_HEADERS = {
   'Content-Type': 'application/json',
 }
 
+// sync-owned columns — enrichment fields are never touched during sync:
+// nome, cognome, num_ospiti, orario_arrivo, orario_uscita, importo_totale,
+// tasse_citta, doc_identita, numero_prenotazione_web, enrichment_source,
+// enrichment_updated_at, internal_booking_id
+const SYNC_COLS = [
+  'uid', 'user_id', 'property', 'source', 'checkin', 'checkout',
+  'summary', 'nights', 'room_id', 'is_mirror_block', 'conflict', 'last_sync',
+].join(',')
+
 async function dbSelect(table: string, query = '') {
   const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?${query}`, { headers: BASE_HEADERS })
   return res.json()
 }
 
-async function dbUpsert(table: string, rows: unknown[], onConflict: string) {
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?on_conflict=${onConflict}`, {
-    method: 'POST',
-    headers: { ...BASE_HEADERS, Prefer: 'resolution=merge-duplicates,return=minimal' },
-    body: JSON.stringify(rows),
-  })
+async function dbUpsert(table: string, rows: unknown[]) {
+  const res = await fetch(
+    `${SUPABASE_URL}/rest/v1/${table}?on_conflict=uid,user_id&columns=${SYNC_COLS}`,
+    {
+      method: 'POST',
+      headers: { ...BASE_HEADERS, Prefer: 'resolution=merge-duplicates,return=minimal' },
+      body: JSON.stringify(rows),
+    }
+  )
   if (!res.ok) throw new Error(await res.text())
 }
 
@@ -56,6 +68,21 @@ function parseIcal(text: string) {
   return events
 }
 
+// Fraction of event A's duration that overlaps with event B
+function overlapFraction(aIn: string, aOut: string, bIn: string, bOut: string): number {
+  const aStart = new Date(aIn).getTime()
+  const aEnd = new Date(aOut).getTime()
+  const bStart = new Date(bIn).getTime()
+  const bEnd = new Date(bOut).getTime()
+  if (aEnd === aStart) return 0
+  return Math.max(0, Math.min(aEnd, bEnd) - Math.max(aStart, bStart)) / (aEnd - aStart)
+}
+
+function isNotAvailable(summary: string): boolean {
+  const s = summary.toLowerCase()
+  return s.includes('not available') || s.includes('closed')
+}
+
 const CORS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, content-type',
@@ -72,41 +99,83 @@ Deno.serve(async (req) => {
       })
     }
 
-    let totalSynced = 0
-    const results = []
+    type Ev = {
+      uid: string; summary: string; checkin: string; checkout: string; nights: number
+      property: string; source: string; user_id: string; room_id: string | null
+    }
+
+    // Phase 1: fetch all iCal feeds, group events by property+user_id
+    const groups = new Map<string, { airbnb: Ev[]; booking: Ev[] }>()
+    const calResults: unknown[] = []
 
     for (const cal of calendars) {
       if (cal.ical_url === 'https://placeholder') continue
       try {
         const res = await fetch(cal.ical_url)
         if (!res.ok) throw new Error(`HTTP ${res.status} fetching iCal`)
-        const text = await res.text()
-        const events = parseIcal(text)
-
-        if (events.length > 0) {
-          const bookings = events.map((e) => ({
-            uid: e.uid,
-            user_id: cal.user_id,
+        const events = parseIcal(await res.text())
+        const key = `${cal.property}||${cal.user_id}`
+        if (!groups.has(key)) groups.set(key, { airbnb: [], booking: [] })
+        const g = groups.get(key)!
+        for (const e of events) {
+          const ev: Ev = {
+            ...e,
             property: cal.property,
             source: cal.source,
-            checkin: e.checkin,
-            checkout: e.checkout,
-            summary: e.summary,
-            nights: e.nights,
-            last_sync: new Date().toISOString(),
-          }))
-          await dbUpsert('bookings', bookings, 'uid,user_id')
-          totalSynced += bookings.length
+            user_id: cal.user_id,
+            room_id: cal.room_id ?? null,
+          }
+          if (cal.source === 'airbnb') g.airbnb.push(ev)
+          else g.booking.push(ev)
         }
-
         await dbPatch('calendars', `id=eq.${cal.id}`, { last_sync: new Date().toISOString() })
-        results.push({ name: cal.name, property: cal.property, status: 'ok', count: events.length })
+        calResults.push({ name: cal.name, property: cal.property, status: 'ok', count: events.length })
       } catch (e: unknown) {
-        results.push({ name: cal.name, property: cal.property, status: 'error', error: (e as Error).message })
+        calResults.push({ name: cal.name, property: cal.property, status: 'error', error: (e as Error).message })
       }
     }
 
-    return new Response(JSON.stringify({ synced: totalSynced, results }), {
+    // Phase 2: classify mirror blocks + conflicts, build upsert rows (sync-owned fields only)
+    const now = new Date().toISOString()
+    const rows: unknown[] = []
+
+    for (const { airbnb, booking } of groups.values()) {
+      for (const ab of airbnb) {
+        let isMirror = false
+        let isConflict = false
+        if (isNotAvailable(ab.summary)) {
+          for (const bk of booking) {
+            const frac = overlapFraction(ab.checkin, ab.checkout, bk.checkin, bk.checkout)
+            if (frac >= 0.9) { isMirror = true; break }
+            if (frac > 0) isConflict = true
+          }
+        }
+        rows.push({
+          uid: ab.uid, user_id: ab.user_id, property: ab.property, source: ab.source,
+          checkin: ab.checkin, checkout: ab.checkout, summary: ab.summary, nights: ab.nights,
+          room_id: ab.room_id, is_mirror_block: isMirror, conflict: isConflict && !isMirror,
+          last_sync: now,
+        })
+      }
+      for (const bk of booking) {
+        let isConflict = false
+        for (const ab of airbnb) {
+          if (!isNotAvailable(ab.summary)) continue
+          const frac = overlapFraction(ab.checkin, ab.checkout, bk.checkin, bk.checkout)
+          if (frac > 0 && frac < 0.9) { isConflict = true; break }
+        }
+        rows.push({
+          uid: bk.uid, user_id: bk.user_id, property: bk.property, source: bk.source,
+          checkin: bk.checkin, checkout: bk.checkout, summary: bk.summary, nights: bk.nights,
+          room_id: bk.room_id, is_mirror_block: false, conflict: isConflict,
+          last_sync: now,
+        })
+      }
+    }
+
+    if (rows.length > 0) await dbUpsert('bookings', rows)
+
+    return new Response(JSON.stringify({ synced: rows.length, results: calResults }), {
       headers: { ...CORS, 'Content-Type': 'application/json' },
     })
   } catch (e: unknown) {
